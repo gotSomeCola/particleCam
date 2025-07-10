@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>动态像素墙</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #000;
+            font-family: 'Courier New', monospace;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #0f0;
+            z-index: 100;
+            text-shadow: 0 0 5px rgba(0,255,0,0.8);
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 10px;
+            color: #0f0;
+            border: 1px solid #0f0;
+        }
+        button {
+            background: #0a0;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        button:hover {
+            background: #0f0;
+        }
+        input[type="range"] {
+            width: 150px;
+            margin: 0 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">动态像素墙 | 移动身体改变像素墙</div>
+    <div id="controls">
+        <div>
+            <label>像素密度: <span id="density-value">20</span></label>
+            <input type="range" id="density" min="5" max="40" value="20">
+        </div>
+        <div>
+            <label>高度敏感度: <span id="height-value">1.0</span></label>
+            <input type="range" id="height-sensitivity" min="0.1" max="3" step="0.1" value="1.0">
+        </div>
+        <button id="effect-btn">切换效果</button>
+        <button id="reset-btn">重置场景</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script>
+        // 初始化变量
+        let scene, camera, renderer;
+        let pixelBlocks = [];
+        let video, videoCanvas, videoCtx;
+        let pixelSize = 20; // 初始像素密度
+        let effectMode = 0; // 0: 静态高度, 1: 动态高度, 2: 旋转
+        let heightSensitivity = 1.0;
+        
+        // 初始化Three.js场景
+        function init() {
+            // 创建场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            
+            // 创建相机
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 15;
+            
+            // 创建渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            
+            // 添加光源
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 3);
+            scene.add(directionalLight);
+            
+            // 初始化摄像头
+            setupCamera();
+            
+            // 创建像素网格
+            createPixelGrid();
+            
+            // 添加事件监听器
+            setupEventListeners();
+            
+            // 开始动画循环
+            animate();
+        }
+        
+        // 设置用户摄像头
+        function setupCamera() {
+            video = document.createElement('video');
+            video.autoplay = true;
+            
+            // 创建视频处理画布
+            videoCanvas = document.createElement('canvas');
+            videoCtx = videoCanvas.getContext('2d');
+            
+            // 请求摄像头访问
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(stream => {
+                    video.srcObject = stream;
+                })
+                .catch(err => {
+                    console.error("摄像头访问失败:", err);
+                    // 后备方案：使用静态图片
+                    video.src = "https://source.unsplash.com/random/640x480";
+                    video.loop = true;
+                    alert("摄像头不可用，已使用静态图片替代");
+                });
+        }
+        
+        // 创建像素网格
+        function createPixelGrid() {
+            // 清除现有像素块
+            pixelBlocks.forEach(pixel => scene.remove(pixel));
+            pixelBlocks = [];
+            
+            // 计算网格尺寸
+            const gridWidth = Math.floor(window.innerWidth / pixelSize);
+            const gridHeight = Math.floor(window.innerHeight / pixelSize);
+            
+            // 创建几何体和材质（共享以提高性能）
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            
+            // 创建像素网格
+            for (let y = 0; y < gridHeight; y++) {
+                for (let x = 0; x < gridWidth; x++) {
+                    const material = new THREE.MeshPhongMaterial({ 
+                        color: 0x000000,
+                        shininess: 30
+                    });
+                    
+                    const pixel = new THREE.Mesh(geometry, material);
+                    
+                    // 定位像素块
+                    pixel.position.set(
+                        x - gridWidth/2, 
+                        -(y - gridHeight/2), 
+                        0
+                    );
+                    
+                    pixel.scale.set(0.9, 0.9, 0.1); // 添加间距
+                    
+                    // 存储原始位置用于动画
+                    pixel.userData = {
+                        originalX: x - gridWidth/2,
+                        originalY: -(y - gridHeight/2),
+                        originalZ: 0,
+                        gridX: x,
+                        gridY: y
+                    };
+                    
+                    scene.add(pixel);
+                    pixelBlocks.push(pixel);
+                }
+            }
+        }
+        
+        // 更新像素墙
+        function updatePixelWall() {
+            if (!video.videoWidth) return;
+            
+            // 设置画布尺寸
+            videoCanvas.width = video.videoWidth;
+            videoCanvas.height = video.videoHeight;
+            
+            // 绘制视频帧到画布
+            videoCtx.drawImage(video, 0, 0, videoCanvas.width, videoCanvas.height);
+            
+            // 计算采样步长（基于像素密度）
+            const stepX = Math.floor(videoCanvas.width / (window.innerWidth / pixelSize));
+            const stepY = Math.floor(videoCanvas.height / (window.innerHeight / pixelSize));
+            
+            // 获取图像数据
+            const imgData = videoCtx.getImageData(0, 0, videoCanvas.width, videoCanvas.height);
+            const data = imgData.data;
+            
+            // 更新每个像素块
+            pixelBlocks.forEach(pixel => {
+                const { gridX, gridY } = pixel.userData;
+                
+                // 计算采样位置
+                const sampleX = Math.min(gridX * stepX, videoCanvas.width - 1);
+                const sampleY = Math.min(gridY * stepY, videoCanvas.height - 1);
+                
+                // 获取像素颜色
+                const idx = (sampleY * videoCanvas.width + sampleX) * 4;
+                const r = data[idx];
+                const g = data[idx + 1];
+                const b = data[idx + 2];
+                
+                // 设置颜色
+                pixel.material.color.setRGB(r/255, g/255, b/255);
+                
+                // 计算亮度（0-1）
+                const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                
+                // 应用不同效果
+                switch(effectMode) {
+                    case 0: // 静态高度
+                        pixel.position.z = brightness * 5 * heightSensitivity;
+                        break;
+                    
+                    case 1: // 动态高度（波浪效果）
+                        const time = Date.now() * 0.001;
+                        const wave = Math.sin(time + pixel.userData.originalX * 0.2 + pixel.userData.originalY * 0.3);
+                        pixel.position.z = brightness * 5 * heightSensitivity * (0.5 + 0.5 * wave);
+                        break;
+                    
+                    case 2: // 旋转效果
+                        const angle = Math.atan2(pixel.userData.originalY, pixel.userData.originalX);
+                        const radius = Math.sqrt(
+                            pixel.userData.originalX * pixel.userData.originalX + 
+                            pixel.userData.originalY * pixel.userData.originalY
+                        );
+                        
+                        pixel.position.x = Math.cos(angle + Date.now() * 0.001) * radius;
+                        pixel.position.y = Math.sin(angle + Date.now() * 0.001) * radius;
+                        pixel.position.z = brightness * 10 * heightSensitivity;
+                        break;
+                }
+            });
+        }
+        
+        // 设置事件监听器
+        function setupEventListeners() {
+            // 窗口大小调整
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                createPixelGrid();
+            });
+            
+            // 控制面板事件
+            document.getElementById('density').addEventListener('input', (e) => {
+                pixelSize = parseInt(e.target.value);
+                document.getElementById('density-value').textContent = pixelSize;
+                createPixelGrid();
+            });
+            
+            document.getElementById('height-sensitivity').addEventListener('input', (e) => {
+                heightSensitivity = parseFloat(e.target.value);
+                document.getElementById('height-value').textContent = heightSensitivity.toFixed(1);
+            });
+            
+            document.getElementById('effect-btn').addEventListener('click', () => {
+                effectMode = (effectMode + 1) % 3;
+                const effects = ['静态高度', '动态波浪', '旋转效果'];
+                document.getElementById('effect-btn').textContent = `切换效果 (${effects[effectMode]})`;
+            });
+            
+            document.getElementById('reset-btn').addEventListener('click', () => {
+                pixelSize = 20;
+                heightSensitivity = 1.0;
+                effectMode = 0;
+                
+                document.getElementById('density').value = pixelSize;
+                document.getElementById('density-value').textContent = pixelSize;
+                document.getElementById('height-sensitivity').value = heightSensitivity;
+                document.getElementById('height-value').textContent = heightSensitivity.toFixed(1);
+                document.getElementById('effect-btn').textContent = '切换效果';
+                
+                createPixelGrid();
+            });
+        }
+        
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePixelWall();
+            
+            // 添加轻微的旋转动画
+          
+            
+            renderer.render(scene, camera);
+        }
+        
+        // 启动应用
+        init();
+    </script>
+</body>
+</html>
