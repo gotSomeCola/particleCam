@@ -1,18 +1,21 @@
-// script.js — MediaPipe Camera integration with debug overlay for hand landmarks and gesture-based emoji drop
+// Updated script.js with full gesture support and keyboard-based mode switching
 
 let scene, camera, renderer, controls;
-let pixelBlocks = [], fallingEmojis = [];
+let pixelBlocks = [];
 let video, videoCanvas, videoCtx;
-let debugCanvas, debugCtx, rgbPanel;
+let debugCanvas, debugCtx, rgbPanel, modeLabel;
 let pixelSize = 20;
 let blockScale = 0.9;
 let previousFrame = null;
 
 let hands, modelLoaded = false;
-let currentRedLevel = 1.0;
 let currentGreenLevel = 1.0;
+let currentRedLevel = 1.0;
 let currentBlueLevel = 1.0;
 let currentBrightness = 1.0;
+
+let currentMode = 'rgb'; // or 'emoji'
+const emojisToFall = [];
 
 function init() {
   setupScene();
@@ -21,6 +24,9 @@ function init() {
   createPixelGrid();
   animate();
   setupHandTracking();
+  createEmojiDisplay();
+  createRGBPanel();
+  createModeLabel();
 }
 
 function setupScene() {
@@ -60,8 +66,11 @@ function setupVideoElements() {
   debugCanvas.style.borderRadius = '8px';
   document.body.appendChild(debugCanvas);
   debugCtx = debugCanvas.getContext('2d');
+}
 
+function createRGBPanel() {
   rgbPanel = document.createElement('div');
+  rgbPanel.id = 'rgb-values';
   rgbPanel.style.position = 'absolute';
   rgbPanel.style.top = '150px';
   rgbPanel.style.right = '20px';
@@ -75,14 +84,24 @@ function setupVideoElements() {
   updateRGBPanel();
 }
 
-function updateRGBPanel() {
-  rgbPanel.innerHTML = `
-    <strong>Color Levels</strong><br>
-    R: ${(currentRedLevel).toFixed(2)}<br>
-    G: ${(currentGreenLevel).toFixed(2)}<br>
-    B: ${(currentBlueLevel).toFixed(2)}<br>
-    ☀ Brightness: ${(currentBrightness).toFixed(2)}
-  `;
+function createModeLabel() {
+  modeLabel = document.createElement('div');
+  modeLabel.style.position = 'absolute';
+  modeLabel.style.top = '285px';
+  modeLabel.style.right = '20px';
+  modeLabel.style.padding = '8px 12px';
+  modeLabel.style.background = 'rgba(0, 0, 0, 0.6)';
+  modeLabel.style.borderRadius = '8px';
+  modeLabel.style.color = '#fff';
+  modeLabel.style.fontFamily = 'monospace';
+  modeLabel.style.fontSize = '14px';
+  modeLabel.style.zIndex = 62;
+  document.body.appendChild(modeLabel);
+  updateModeLabel();
+}
+
+function updateModeLabel() {
+  modeLabel.textContent = `Mode: ${currentMode.toUpperCase()}`;
 }
 
 function createPixelGrid() {
@@ -99,19 +118,9 @@ function createPixelGrid() {
       const material = new THREE.MeshPhongMaterial({ color: 0x000000 });
       const pixel = new THREE.Mesh(geometry, material);
 
-      pixel.position.set(
-        x - gridWidth / 2,
-        -(y - gridHeight / 2),
-        0
-      );
-
+      pixel.position.set(x - gridWidth / 2, -(y - gridHeight / 2), 0);
       pixel.scale.set(blockScale, blockScale, 0.1);
-      pixel.userData = {
-        originalX: x - gridWidth / 2,
-        originalY: -(y - gridHeight / 2),
-        gridX: x,
-        gridY: y
-      };
+      pixel.userData = { gridX: x, gridY: y };
 
       scene.add(pixel);
       pixelBlocks.push(pixel);
@@ -146,12 +155,10 @@ function updatePixelWall() {
     b = Math.min(255, b * currentBlueLevel * currentBrightness);
 
     pixel.material.color.setRGB(r / 255, g / 255, b / 255);
-
     const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     pixel.position.z = brightness * 5;
   });
 
-  updateEmojis();
   previousFrame = currentFrame;
 }
 
@@ -172,83 +179,72 @@ function setupEventListeners() {
   document.getElementById('size').addEventListener('input', (e) => {
     blockScale = parseFloat(e.target.value);
     document.getElementById('size-value').textContent = blockScale.toFixed(1);
-    pixelBlocks.forEach(pixel => {
-      pixel.scale.set(blockScale, blockScale, 0.1);
-    });
+    pixelBlocks.forEach(pixel => pixel.scale.set(blockScale, blockScale, 0.1));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'm') {
+      currentMode = currentMode === 'rgb' ? 'emoji' : 'rgb';
+      updateModeLabel();
+
+    }
+     if (e.key.toLowerCase() === 'r') {
+      currentRedLevel = 1.0;
+      currentGreenLevel = 1.0;
+      currentBlueLevel = 1.0;
+      currentBrightness = 1.0;
+      currentMode = 'rgb';
+      updateRGBPanel();
+      updateModeLabel();
+    }
   });
 }
 
 function setupHandTracking() {
-  hands = new Hands({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-  });
-
-  hands.setOptions({
-    maxNumHands: 1,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.7
-  });
+  hands = new Hands({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+  hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
   hands.onResults(results => {
     debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    if (results.multiHandLandmarks?.length > 0) {
       const landmarks = results.multiHandLandmarks[0];
       drawDebugLandmarks(landmarks);
 
-      const thumbTip = landmarks[4];
-      const indexTip = landmarks[8];
-      const middleTip = landmarks[12];
-      const ringTip = landmarks[16];
-      const pinkyTip = landmarks[20];
-
-      const greenDist = distance(thumbTip, middleTip);
-      const redDist = distance(thumbTip, indexTip);
-      const blueDist = distance(thumbTip, ringTip);
-      const brightDist = distance(thumbTip, pinkyTip);
-
-      // Smooth transitions
-      currentGreenLevel = lerp(currentGreenLevel, mapDistanceToScale(greenDist), 0.1);
-      currentRedLevel = lerp(currentRedLevel, mapDistanceToScale(redDist), 0.1);
-      currentBlueLevel = lerp(currentBlueLevel, mapDistanceToScale(blueDist), 0.1);
-      currentBrightness = lerp(currentBrightness, mapDistanceToScale(brightDist), 0.1);
-
-      updateRGBPanel();
-
-      // Detect OK gesture (thumb tip close to index tip)
-      const okDist = distance(thumbTip, indexTip);
-      if (okDist < 0.07) {
-        spawnEmoji();
+      if (currentMode === 'emoji') {
+        if (isOkGesture(landmarks)) dropEmoji('👌');
+        if (isPeaceGesture(landmarks)) dropEmoji('✌️');
+        if (isThumbsUpGesture(landmarks)) dropEmoji('👍');
+      } else {
+        updateRGBFromHand(landmarks);
       }
     }
   });
 
   const mpCamera = new Camera(video, {
-    onFrame: async () => {
-      await hands.send({ image: video });
-    },
-    width: 640,
-    height: 480
+    onFrame: async () => await hands.send({ image: video }),
+    width: 640, height: 480
   });
-
   mpCamera.start();
   modelLoaded = true;
 }
 
-function distance(a, b) {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
+function dropEmoji(char) {
+  const span = document.createElement('span');
+  span.textContent = char;
+  span.style.position = 'absolute';
+  span.style.left = Math.random() * window.innerWidth + 'px';
+  span.style.top = '-40px';
+  span.style.fontSize = '32px';
+  span.style.zIndex = 1000;
+  span.style.animation = 'fall 2s linear forwards';
+  document.body.appendChild(span);
+  setTimeout(() => span.remove(), 2000);
 }
 
-function mapDistanceToScale(d) {
-  const clamped = Math.max(0.05, Math.min(0.3, d));
-  return ((clamped - 0.05) / 0.25) * 1.5 + 0.5;
-}
-
-function lerp(start, end, amt) {
-  return start + (end - start) * amt;
+function createEmojiDisplay() {
+  const style = document.createElement('style');
+  style.innerHTML = `@keyframes fall { 0% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(100vh); opacity: 0; } }`;
+  document.head.appendChild(style);
 }
 
 function drawDebugLandmarks(landmarks) {
@@ -262,29 +258,58 @@ function drawDebugLandmarks(landmarks) {
   });
 }
 
-function spawnEmoji() {
-  const emoji = document.createElement('div');
-  emoji.textContent = '👌';
-  emoji.style.position = 'absolute';
-  emoji.style.left = `${Math.random() * window.innerWidth}px`;
-  emoji.style.top = `0px`;
-  emoji.style.fontSize = '32px';
-  emoji.style.zIndex = 999;
-  emoji.style.transition = 'top 2s ease-out';
-  document.body.appendChild(emoji);
-
-  setTimeout(() => {
-    emoji.style.top = `${window.innerHeight}px`;
-  }, 50);
-
-  setTimeout(() => {
-    emoji.remove();
-  }, 2500);
+function dist(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function updateEmojis() {
-  // Can be used for animated emoji physics later
+function mapDistanceToScale(d) {
+  return Math.min(2, Math.max(0.5, d * 5));
 }
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function updateRGBFromHand(lm) {
+  const green = dist(lm[4], lm[12]); // Thumb to middle
+  const red = dist(lm[4], lm[8]); // Thumb to index
+  const blue = dist(lm[4], lm[16]); // Thumb to ring
+  const bright = dist(lm[4], lm[20]); // Thumb to pinky
+
+  currentGreenLevel = lerp(currentGreenLevel, mapDistanceToScale(green), 0.1);
+  currentRedLevel = lerp(currentRedLevel, mapDistanceToScale(red), 0.1);
+  currentBlueLevel = lerp(currentBlueLevel, mapDistanceToScale(blue), 0.1);
+  currentBrightness = lerp(currentBrightness, mapDistanceToScale(bright), 0.1);
+
+  updateRGBPanel();
+}
+
+function updateRGBPanel() {
+  const panel = document.getElementById('rgb-values');
+  if (panel) {
+    panel.innerHTML = `R: ${currentRedLevel.toFixed(2)}<br>G: ${currentGreenLevel.toFixed(2)}<br>B: ${currentBlueLevel.toFixed(2)}<br>Brightness: ${currentBrightness.toFixed(2)}`;
+  }
+}
+
+function isOkGesture(lm) {
+  return dist(lm[4], lm[8]) < 0.07 && dist(lm[4], lm[12]) > 0.3 && dist(lm[4], lm[16]) > 0.3 && dist(lm[4], lm[20]) > 0.3;
+}
+
+function isPeaceGesture(lm) {
+  return dist(lm[8], lm[4]) > 0.3 && dist(lm[12], lm[4]) > 0.3 && dist(lm[16], lm[4]) < 0.15 && dist(lm[20], lm[4]) < 0.15;
+}
+
+function isThumbsUpGesture(lm) {
+  const thumbUp = lm[4].y < lm[0].y;
+  const fingersFolded =
+    dist(lm[8], lm[0]) < 0.2 &&
+    dist(lm[12], lm[0]) < 0.2 &&
+    dist(lm[16], lm[0]) < 0.2 &&
+    dist(lm[20], lm[0]) < 0.2;
+
+  return thumbUp && fingersFolded;
+}
+
 
 function animate() {
   requestAnimationFrame(animate);
