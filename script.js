@@ -1,34 +1,36 @@
-// Updated script.js with full gesture support and keyboard-based mode switching
-
+// Main Three.js scene objects and pixel wall state
 let scene, camera, renderer, controls;
 let pixelBlocks = [];
 let video, videoCanvas, videoCtx;
 let debugCanvas, debugCtx, rgbPanel, modeLabel;
-let pixelSize = 20;
-let blockScale = 0.9;
+let pixelSize = 20;      // default pixel density
+let blockScale = 0.9;    // default pixel block size
 let previousFrame = null;
 
+// Default hand tracking and color control state
 let hands, modelLoaded = false;
 let currentGreenLevel = 1.0;
 let currentRedLevel = 1.0;
 let currentBlueLevel = 1.0;
 let currentBrightness = 1.0;
 
-let currentMode = 'rgb'; // or 'emoji'
+let currentMode = 'rgb'; // 'rgb' for color and brightness control, 'emoji' for emoji drop
 const emojisToFall = [];
 
+// Initializes the scene, video elements, and event listeners
 function init() {
-  setupScene();
-  setupVideoElements();
-  setupEventListeners();
-  createPixelGrid();
-  animate();
-  setupHandTracking();
-  createEmojiDisplay();
-  createRGBPanel();
-  createModeLabel();
+  setupScene();             // Sets up Three.js scene, camera, lights
+  setupVideoElements();     // Prepares video and debug canvases
+  setupEventListeners();    // UI and keyboard listeners
+  createPixelGrid();        // Builds the pixel wall mesh grid
+  animate();                // Starts render loop
+  setupHandTracking();      // Initializes MediaPipe Hands
+  createEmojiDisplay();     // Adds emoji animation CSS
+  createRGBPanel();         // Shows RGB values panel
+  createModeLabel();        // Shows current mode label
 }
 
+// Sets up Three.js scene, camera, renderer, and lights
 function setupScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x001122);
@@ -43,6 +45,7 @@ function setupScene() {
   controls = new THREE.OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
+  // Lighting for pixel blocks
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
   const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
   directionalLight.position.set(1, 1, 3);
@@ -50,11 +53,13 @@ function setupScene() {
   scene.add(directionalLight);
 }
 
+// Prepares video and debug canvases for camera feed and hand landmarks
 function setupVideoElements() {
   video = document.getElementById('camera-video');
   videoCanvas = document.createElement('canvas');
   videoCtx = videoCanvas.getContext('2d');
 
+  // Debug canvas for hand landmarks visualization
   debugCanvas = document.createElement('canvas');
   debugCanvas.style.position = 'absolute';
   debugCanvas.style.top = '20px';
@@ -68,6 +73,7 @@ function setupVideoElements() {
   debugCtx = debugCanvas.getContext('2d');
 }
 
+// Creates floating RGB value panel
 function createRGBPanel() {
   rgbPanel = document.createElement('div');
   rgbPanel.id = 'rgb-values';
@@ -84,6 +90,7 @@ function createRGBPanel() {
   updateRGBPanel();
 }
 
+// Shows current mode (RGB or Emoji)
 function createModeLabel() {
   modeLabel = document.createElement('div');
   modeLabel.style.position = 'absolute';
@@ -104,6 +111,7 @@ function updateModeLabel() {
   modeLabel.textContent = `Mode: ${currentMode.toUpperCase()}`;
 }
 
+// Builds the pixel wall mesh grid based on current density and size
 function createPixelGrid() {
   pixelBlocks.forEach(p => scene.remove(p));
   pixelBlocks = [];
@@ -118,6 +126,7 @@ function createPixelGrid() {
       const material = new THREE.MeshPhongMaterial({ color: 0x000000 });
       const pixel = new THREE.Mesh(geometry, material);
 
+      // Center the grid and set scale
       pixel.position.set(x - gridWidth / 2, -(y - gridHeight / 2), 0);
       pixel.scale.set(blockScale, blockScale, 0.1);
       pixel.userData = { gridX: x, gridY: y };
@@ -128,6 +137,7 @@ function createPixelGrid() {
   }
 }
 
+// Updates pixel wall colors and depth from camera feed and RGB levels
 function updatePixelWall() {
   if (!video.videoWidth) return;
 
@@ -142,6 +152,7 @@ function updatePixelWall() {
 
   pixelBlocks.forEach(pixel => {
     const { gridX, gridY } = pixel.userData;
+    // Sample color from camera feed for each pixel block
     const sampleX = Math.min(videoCanvas.width - 1 - (gridX * stepX), videoCanvas.width - 1);
     const sampleY = Math.min(gridY * stepY, videoCanvas.height - 1);
     const idx = (sampleY * videoCanvas.width + sampleX) * 4;
@@ -150,11 +161,13 @@ function updatePixelWall() {
     let g = data[idx + 1];
     let b = data[idx + 2];
 
+    // Apply RGB and brightness levels from hand gestures
     r = Math.min(255, r * currentRedLevel * currentBrightness);
     g = Math.min(255, g * currentGreenLevel * currentBrightness);
     b = Math.min(255, b * currentBlueLevel * currentBrightness);
 
     pixel.material.color.setRGB(r / 255, g / 255, b / 255);
+    // Set Z position for depth effect based on brightness
     const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
     pixel.position.z = brightness * 5;
   });
@@ -162,6 +175,7 @@ function updatePixelWall() {
   previousFrame = currentFrame;
 }
 
+// Handles UI controls
 function setupEventListeners() {
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -170,25 +184,27 @@ function setupEventListeners() {
     createPixelGrid();
   });
 
+  // Pixel density slider
   document.getElementById('density').addEventListener('input', (e) => {
     pixelSize = parseInt(e.target.value);
     document.getElementById('density-value').textContent = pixelSize;
     createPixelGrid();
   });
 
+  // Pixel size slider
   document.getElementById('size').addEventListener('input', (e) => {
     blockScale = parseFloat(e.target.value);
     document.getElementById('size-value').textContent = blockScale.toFixed(1);
     pixelBlocks.forEach(pixel => pixel.scale.set(blockScale, blockScale, 0.1));
   });
 
+  // Keyboard shortcuts for mode switching and RGB reset
   document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'm') {
       currentMode = currentMode === 'rgb' ? 'emoji' : 'rgb';
       updateModeLabel();
-
     }
-     if (e.key.toLowerCase() === 'r') {
+    if (e.key.toLowerCase() === 'r') {
       currentRedLevel = 1.0;
       currentGreenLevel = 1.0;
       currentBlueLevel = 1.0;
@@ -200,6 +216,7 @@ function setupEventListeners() {
   });
 }
 
+// Initializes MediaPipe Hands and sets up gesture detection
 function setupHandTracking() {
   hands = new Hands({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
   hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
@@ -210,16 +227,19 @@ function setupHandTracking() {
       const landmarks = results.multiHandLandmarks[0];
       drawDebugLandmarks(landmarks);
 
+      // Emoji mode: drop emoji for specific gestures
       if (currentMode === 'emoji') {
         if (isOkGesture(landmarks)) dropEmoji('👌');
         if (isPeaceGesture(landmarks)) dropEmoji('✌️');
         if (isThumbsUpGesture(landmarks)) dropEmoji('👍');
       } else {
+        // RGB mode: control color channels and brightness with hand
         updateRGBFromHand(landmarks);
       }
     }
   });
 
+  // Start camera feed for hand tracking
   const mpCamera = new Camera(video, {
     onFrame: async () => await hands.send({ image: video }),
     width: 640, height: 480
@@ -228,6 +248,7 @@ function setupHandTracking() {
   modelLoaded = true;
 }
 
+// Drops an emoji from the top of the screen with animation
 function dropEmoji(char) {
   const span = document.createElement('span');
   span.textContent = char;
@@ -241,12 +262,14 @@ function dropEmoji(char) {
   setTimeout(() => span.remove(), 2000);
 }
 
+// Adds CSS for emoji falling animation
 function createEmojiDisplay() {
   const style = document.createElement('style');
   style.innerHTML = `@keyframes fall { 0% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(100vh); opacity: 0; } }`;
   document.head.appendChild(style);
 }
 
+// Draws hand landmarks on debug canvas
 function drawDebugLandmarks(landmarks) {
   debugCtx.fillStyle = '#00ffcc';
   landmarks.forEach(point => {
@@ -258,24 +281,29 @@ function drawDebugLandmarks(landmarks) {
   });
 }
 
+// Utility: Euclidean distance between two hand landmarks
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+// Utility: Maps hand distance to RGB/brightness scale
 function mapDistanceToScale(d) {
   return Math.min(2, Math.max(0.5, d * 5));
 }
 
+// Utility: Linear interpolation
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+// Updates RGB and brightness levels from hand gesture distances
 function updateRGBFromHand(lm) {
   const green = dist(lm[4], lm[12]); // Thumb to middle
   const red = dist(lm[4], lm[8]); // Thumb to index
   const blue = dist(lm[4], lm[16]); // Thumb to ring
   const bright = dist(lm[4], lm[20]); // Thumb to pinky
 
+  // Smoothly interpolate to new values
   currentGreenLevel = lerp(currentGreenLevel, mapDistanceToScale(green), 0.1);
   currentRedLevel = lerp(currentRedLevel, mapDistanceToScale(red), 0.1);
   currentBlueLevel = lerp(currentBlueLevel, mapDistanceToScale(blue), 0.1);
@@ -284,6 +312,7 @@ function updateRGBFromHand(lm) {
   updateRGBPanel();
 }
 
+// Updates RGB panel display
 function updateRGBPanel() {
   const panel = document.getElementById('rgb-values');
   if (panel) {
@@ -291,14 +320,17 @@ function updateRGBPanel() {
   }
 }
 
+// Gesture detection: OK sign
 function isOkGesture(lm) {
   return dist(lm[4], lm[8]) < 0.07 && dist(lm[4], lm[12]) > 0.3 && dist(lm[4], lm[16]) > 0.3 && dist(lm[4], lm[20]) > 0.3;
 }
 
+// Gesture detection: Peace sign
 function isPeaceGesture(lm) {
   return dist(lm[8], lm[4]) > 0.3 && dist(lm[12], lm[4]) > 0.3 && dist(lm[16], lm[4]) < 0.15 && dist(lm[20], lm[4]) < 0.15;
 }
 
+// Gesture detection: Thumbs up
 function isThumbsUpGesture(lm) {
   const thumbUp = lm[4].y < lm[0].y;
   const fingersFolded =
@@ -310,7 +342,7 @@ function isThumbsUpGesture(lm) {
   return thumbUp && fingersFolded;
 }
 
-
+// Main animation/render loop
 function animate() {
   requestAnimationFrame(animate);
   updatePixelWall();
@@ -318,4 +350,5 @@ function animate() {
   renderer.render(scene, camera);
 }
 
+// Start app when DOM is ready
 document.addEventListener('DOMContentLoaded', init);
